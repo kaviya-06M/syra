@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, DateTime
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 from datetime import datetime
 
 from .database import Base
@@ -31,3 +31,38 @@ class SystemMetric(Base):
 
     # Auto-stamped when row is inserted
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Incident(Base):
+    """A diagnosis snapshot retained for feedback and root-cause ML training."""
+
+    __tablename__ = "incidents"
+
+    id = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    event_data = Column(Text, nullable=False)
+    anomaly_info = Column(Text, nullable=False, default="{}")
+    matched_rules = Column(Text, nullable=False, default="[]")
+    evidence = Column(Text, nullable=False, default="[]")
+    rule_root_cause = Column(String, nullable=True)
+    rule_confidence = Column(Float, nullable=False, default=0.0)
+    ml_root_cause = Column(String, nullable=True)
+    ml_confidence = Column(Float, nullable=True)
+    final_root_cause = Column(String, nullable=True)
+    final_confidence = Column(Float, nullable=False, default=0.0)
+    remediation_action = Column(String, nullable=True)
+    verification_resolved = Column(Boolean, nullable=True)
+
+
+class IncidentFeedback(Base):
+    """Human-verified label and outcome for one recorded incident."""
+
+    __tablename__ = "incident_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    incident_id = Column(String, nullable=False, unique=True, index=True)
+    feedback = Column(String, nullable=False)  # confirmed | corrected | unknown
+    verified_root_cause = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    remediation_verified = Column(Boolean, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

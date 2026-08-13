@@ -34,34 +34,6 @@ class TelemetryDataset:
         self.scaler = FeatureScaler(model_path=scaler_path)
         self.seq_builder = SequenceBuilder(sequence_length=sequence_length)
 
-    def from_synthetic(self, num_samples: int = 2000) -> Tuple[np.ndarray, FeatureScaler]:
-        """
-        Generates synthetic normal baseline telemetry for initial training.
-        """
-        np.random.seed(42)
-        cpu = np.random.uniform(0.10, 0.45, size=(num_samples, 1))
-        mem = np.random.uniform(0.25, 0.55, size=(num_samples, 1))
-        disk = np.random.uniform(0.20, 0.40, size=(num_samples, 1))
-        net_tx = np.random.uniform(0.01, 0.20, size=(num_samples, 1))
-        net_rx = np.random.uniform(0.01, 0.25, size=(num_samples, 1))
-        pkt_tx = np.random.uniform(0.01, 0.15, size=(num_samples, 1))
-        pkt_rx = np.random.uniform(0.01, 0.15, size=(num_samples, 1))
-        proc_cnt = np.random.uniform(0.10, 0.30, size=(num_samples, 1))
-        top_cpu = cpu * np.random.uniform(0.40, 0.80, size=(num_samples, 1))
-        top_mem = mem * np.random.uniform(0.40, 0.70, size=(num_samples, 1))
-        win_evt = np.zeros((num_samples, 1))
-
-        matrix = np.hstack([
-            cpu, mem, disk, net_tx, net_rx, pkt_tx, pkt_rx,
-            proc_cnt, top_cpu, top_mem, win_evt
-        ]).astype(np.float32)
-
-        scaled = self.scaler.fit_transform(matrix)
-        self.scaler.save()
-
-        sequences = self.seq_builder.build(scaled)
-        return sequences, self.scaler
-
     def from_database(
         self,
         db_session: Session,
@@ -72,8 +44,11 @@ class TelemetryDataset:
         """
         metrics = get_all_metrics(db_session, limit=limit)
         if not metrics or len(metrics) < self.sequence_length:
-            print("[TelemetryDataset] Database contains insufficient data. Falling back to baseline synthetic telemetry.")
-            return self.from_synthetic(num_samples=2000)
+            raise ValueError(
+                "Insufficient live telemetry in the database: "
+                f"need at least {self.sequence_length} snapshots, found {len(metrics)}. "
+                "Continue collecting normal system data before training."
+            )
 
         feature_matrix = []
         for m in metrics:

@@ -5,6 +5,7 @@ Recommendation) and exposes the latest diagnosis so the frontend and the
 LLM chat route can both read it.
 """
 
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
@@ -12,6 +13,8 @@ from pydantic import BaseModel
 
 from reasoning.root_cause_engine import RootCauseEngine
 from api.routes.metrics import _metrics_history
+from database.database import SessionLocal
+from database.incident_repository import create_incident
 
 router = APIRouter(tags=["diagnosis"])
 
@@ -53,7 +56,27 @@ def analyze(payload: DiagnosisRequest):
     serializable_result = {k: v for k, v in result.items() if k != "graph"}
     serializable_result["timestamp"] = datetime.now().isoformat()
 
+    # Capture the complete diagnosis now; it becomes ML training data only
+    # after the user supplies a verified feedback label.
+    if serializable_result.get("root_cause"):
+        db = SessionLocal()
+        try:
+            incident = create_incident(
+                db,
+                event_data=event_data,
+                anomaly_info=anomaly_info,
+                diagnosis=serializable_result,
+            )
+            serializable_result["incident_id"] = incident.id
+        finally:
+            db.close()
+
     _latest_diagnosis = serializable_result
+    print(
+        "[RootCauseEngine] Diagnosis result:\n"
+        f"{json.dumps(serializable_result, indent=2, default=str)}",
+        flush=True,
+    )
     return serializable_result
 
 

@@ -1,11 +1,12 @@
 import os
+from collections import deque
 from typing import Any, Dict, List, Optional
 import numpy as np
 
 try:
     from backend.ml.models.lstm_autoencoder import LSTMAutoencoder
     from backend.ml.utils.metrics import compute_feature_contributions, compute_anomaly_score
-    from backend.ml.utils.threshold import AnomalyThreshold
+    from backend.ml.utils.threshold import AnomalyThreshold, compute_threshold_stats
     from backend.preprocessing.cleaner import DataCleaner
     from backend.preprocessing.feature_engineering import FeatureEngineer
     from backend.preprocessing.scaler import FeatureScaler
@@ -13,7 +14,7 @@ try:
 except ImportError:
     from ..models.lstm_autoencoder import LSTMAutoencoder
     from ..utils.metrics import compute_feature_contributions, compute_anomaly_score
-    from ..utils.threshold import AnomalyThreshold
+    from ..utils.threshold import AnomalyThreshold, compute_threshold_stats
     from ...preprocessing.cleaner import DataCleaner
     from ...preprocessing.feature_engineering import FeatureEngineer
     from ...preprocessing.scaler import FeatureScaler
@@ -43,6 +44,7 @@ class AnomalyDetector:
             filepath=threshold_path,
             default_threshold=default_threshold,
         )
+        self.reconstruction_error_history: deque[float] = deque(maxlen=50)
         self.autoencoder = LSTMAutoencoder(
             timesteps=sequence_length,
             n_features=self.engineer.feature_count(),
@@ -104,9 +106,17 @@ class AnomalyDetector:
 
         reconstructed = self.autoencoder.reconstruct(seq)
         rec_error = float(np.mean((seq - reconstructed) ** 2))
+        self.reconstruction_error_history.append(rec_error)
 
-        is_anomaly = self.threshold_mgr.is_anomaly(rec_error)
-        anomaly_score = compute_anomaly_score(rec_error, self.threshold)
+        # Derive the anomaly threshold from the LSTM reconstruction-error history
+        # at runtime instead of relying on a manually fixed constant.
+        stats = compute_threshold_stats(list(self.reconstruction_error_history))
+        derived_threshold = max(self.threshold, stats["threshold"])
+        if len(self.reconstruction_error_history) < 3:
+            derived_threshold = max(self.threshold, rec_error * 1.5 + 1e-6)
+
+        is_anomaly = rec_error > derived_threshold
+        anomaly_score = compute_anomaly_score(rec_error, derived_threshold)
 
         # Feature contribution breakdown
         feature_names = self.engineer.feature_names()
@@ -119,7 +129,7 @@ class AnomalyDetector:
             "is_anomaly": bool(is_anomaly),
             "anomaly_score": anomaly_score,
             "reconstruction_error": round(rec_error, 6),
-            "threshold": round(self.threshold, 6),
+            "threshold": round(derived_threshold, 6),
             "confidence": confidence,
             "top_contributor": top_feature,
             "contributing_features": contributions,

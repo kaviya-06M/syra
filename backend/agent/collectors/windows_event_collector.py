@@ -17,8 +17,7 @@ class WindowsEventCollector:
 
         try:
             hand = win32evtlog.OpenEventLog(server, logtype)
-            flags = win32evtlog.EVENTLOG_BACKWARDS_READ | \
-                    win32evtlog.EVENTLOG_SEQUENTIAL_READ
+            flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
 
             total = 0
 
@@ -28,14 +27,19 @@ class WindowsEventCollector:
                     break
 
                 for event in records:
-                    events.append({
-                        "event_id": event.EventID,
-                        "source": event.SourceName,
-                        "time": str(event.TimeGenerated)
-                    })
-                    total += 1
-                    if total >= 10:
-                        break
+                    event_type = getattr(event, "EventType", 0)
+                    is_error = event_type in (win32evtlog.EVENTLOG_ERROR_TYPE, win32evtlog.EVENTLOG_WARNING_TYPE)
+
+                    if is_error:
+                        events.append({
+                            "event_id": event.EventID,
+                            "source": event.SourceName,
+                            "type": "Error" if event_type == win32evtlog.EVENTLOG_ERROR_TYPE else "Warning",
+                            "time": str(event.TimeGenerated)
+                        })
+                        total += 1
+                        if total >= 10:
+                            break
         except Exception as e:
             print(f"[WindowsEventCollector] Warning: {e}")
         finally:

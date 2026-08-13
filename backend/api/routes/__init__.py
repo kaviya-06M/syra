@@ -4,6 +4,7 @@ from .remediation import router as remediation_router
 from .chat import router as chat_router
 from .voice import router as voice_router
 from .history import router as history_router
+from .incidents import router as incidents_router
 
 __all__ = [
     "metrics_router",
@@ -12,4 +13,5 @@ __all__ = [
     "chat_router",
     "voice_router",
     "history_router",
+    "incidents_router",
 ]

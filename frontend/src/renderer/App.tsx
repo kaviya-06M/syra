@@ -1,6 +1,3 @@
-import React from 'react';
-import ChatPage from './pages/ChatPage';
+import App from '../App';
 
-export default function App() {
-	return <ChatPage />;
-}
+export default App;

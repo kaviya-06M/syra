@@ -3,16 +3,20 @@ uvicorn[standard]==0.30.6
 psutil==6.0.0
 python-dotenv==1.0.1
 pydantic==2.9.2
+SQLAlchemy==2.0.51
+networkx==3.4.2
+python-multipart==0.0.32
 
 # LSTM anomaly detector
 tensorflow==2.17.0
 numpy==1.26.4
+scikit-learn==1.5.2
 
 # Knowledge graph
 neo4j==5.24.0
 
-# LLM
-anthropic==0.34.2
+# LLM (NVIDIA NIM uses the OpenAI-compatible client)
+openai==1.109.1
 
 # Voice
 SpeechRecognition==3.10.4

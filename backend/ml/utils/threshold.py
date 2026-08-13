@@ -27,7 +27,8 @@ def compute_threshold_stats(
     pct_err = float(np.percentile(errors, percentile))
     max_err = float(np.max(errors))
 
-    # Dynamic threshold based on upper percentile or 3-sigma standard deviation
+    # Dynamic threshold based on the LSTM reconstruction-error distribution
+    # rather than a manually fixed value. This is derived from validation data.
     threshold = float(max(pct_err, mean_err + (std_multiplier * std_err)))
 
     return {
@@ -56,7 +57,7 @@ class AnomalyThreshold:
         self.load()
 
     def is_anomaly(self, reconstruction_error: float) -> bool:
-        """Returns True if the reconstruction error exceeds threshold."""
+        """Returns True if the reconstruction error exceeds the dynamically derived threshold."""
         return float(reconstruction_error) > self.threshold
 
     def save(self, stats: Optional[Dict[str, float]] = None) -> None:

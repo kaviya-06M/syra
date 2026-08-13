@@ -29,53 +29,78 @@ class ExplanationEngine:
     def __init__(self, provider: LLMProvider = None):
         self.provider = provider or LLMProvider()
 
-    def explain(self, user_message: str, diagnosis: dict = None, history: list = None) -> str:
+    def explain(self, user_message: str, diagnosis: dict = None, history: list = None, ml_analysis: dict = None, metrics: dict = None) -> str:
         """
         General chat explanation used by /api/chat routes.
-
-        If diagnosis context exists, the response is instructed to clearly
-        state the root cause in the first sentence.
+        Answers user questions conversationally based on real system state and chat history.
         """
         diagnosis = diagnosis or {}
         history = history or []
+        ml_analysis = ml_analysis or {}
+        metrics = metrics or {}
+
+        # Extract real metrics (filtering protected system processes)
+        cpu = metrics.get("cpu", {})
+        cpu_pct = cpu.get("cpu_percent", 0.0)
+        memory = metrics.get("memory", {})
+        mem_pct = memory.get("memory_percent", 0.0)
+        disk = metrics.get("disk", {})
+        disk_pct = disk.get("disk_percent", 0.0)
+        disk_breakdown = disk.get("breakdown") or []
+        storage_summary = ""
+        if disk_breakdown:
+            top_folders = [f"{f.get('name')} ({f.get('size_formatted')})" for f in disk_breakdown[:3]]
+            storage_summary = f" (Top Space Consumers: {', '.join(top_folders)})"
+
+        from remediation.actions import RemediationActions
+        top_procs = metrics.get("processes", {}).get("top_processes", [])
+        user_procs = [p for p in top_procs if not RemediationActions.is_protected_process(p.get("name"))]
+        top_p = user_procs[0] if user_procs else (top_procs[0] if top_procs else {})
+        top_p_name = top_p.get("name", "Active apps")
+        top_p_cpu = top_p.get("cpu", 0.0)
+        top_p_mem = top_p.get("memory", 0.0)
 
         root_cause = diagnosis.get("root_cause")
-        confidence = diagnosis.get("confidence")
         evidence = diagnosis.get("evidence") or []
+        path = diagnosis.get("path") or []
 
+        remediation_info = "No remediation needed (system is operating within healthy parameters)."
         if root_cause:
-            recent_diagnosis = (
-                f"Root cause: {root_cause}\n"
-                f"Confidence: {confidence}\n"
-                f"Evidence: {evidence}"
-            )
-            extra_instruction = (
-                "If a root cause is available, your first sentence must start with "
-                "'Root cause:' and include the exact root cause text. Then add a "
-                "brief second paragraph that explains why it matters and what the "
-                "user should do next, using the evidence provided."
-            )
+            clean_cause = str(root_cause).replace("_", " ")
+            clean_evidence = ", ".join(str(e).replace("_", " ") for e in evidence) if evidence else "high resource load"
+            path_str = " -> ".join(str(p).replace("_", " ") for p in path) if path else clean_cause
+            diagnosis_info = f"Diagnosed Issue: {clean_cause} | Graph Traversal Chain: {path_str} | Symptoms: {clean_evidence}"
+            try:
+                from remediation.executor import REMEDIATION_POLICY, ACTION_DESCRIPTIONS
+                actions = REMEDIATION_POLICY.get(root_cause, [])
+                if actions:
+                    primary_action = actions[0].replace('_', ' ')
+                    desc = ACTION_DESCRIPTIONS.get(actions[0], '')
+                    remediation_info = f"Recommended Fix: {primary_action} ({desc}). Instruct user to approve in the Fix & Approval tab."
+            except Exception:
+                remediation_info = "Automated optimization available in Fix & Approval tab."
         else:
-            recent_diagnosis = "No recent diagnosis."
-            extra_instruction = "If no diagnosis exists, say that clearly and ask to run diagnosis."
+            diagnosis_info = "System health status: healthy, normal operations."
 
-        user_content = CHAT_TEMPLATE.format(
-            cpu_percent="?",
-            memory_percent="?",
-            disk_percent="?",
-            top_process="N/A",
-            top_process_cpu="?",
-            top_process_mem="?",
-            recent_diagnosis=recent_diagnosis,
-            user_message=user_message,
+        context_prompt = (
+            f"SYSTEM METRICS:\n"
+            f"- CPU Usage: {cpu_pct}%\n"
+            f"- RAM Usage: {mem_pct}%\n"
+            f"- Disk Usage: {disk_pct}%{storage_summary}\n"
+            f"- Active App: {top_p_name} ({top_p_cpu}% CPU, {top_p_mem}% RAM)\n"
+            f"- Reasoning Engine Diagnosis: {diagnosis_info}\n"
+            f"- Remediation Capability: {remediation_info}\n\n"
+            f"USER QUERY: {user_message}\n\n"
+            f"INSTRUCTION: Answer the USER QUERY in 1 to 3 clear, short, exact sentences using the Reasoning Engine facts above. If recommending a fix, tell user to approve it in the Fix & Approval tab."
         )
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(history)
-        messages.append({"role": "system", "content": extra_instruction})
-        messages.append({"role": "user", "content": user_content})
+        # Add rolling chat history so context is preserved across turns
+        for turn in history[-10:]:
+            messages.append({"role": turn.get("role", "user"), "content": turn.get("content", "")})
+        messages.append({"role": "user", "content": context_prompt})
 
-        return self.provider.chat(messages)
+        return self.provider.chat(messages, max_tokens=100)
 
     # ── 1. After RootCauseEngine ──────────────────────────────────────────────
 

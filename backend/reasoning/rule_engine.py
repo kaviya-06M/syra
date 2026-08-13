@@ -8,10 +8,12 @@ class RuleEngine:
     """
 
     def __init__(self):
+        from remediation.actions import RemediationActions
+
         self.rules = [
             {
                 "id": "HIGH_CPU",
-                "condition": lambda data: data.get("cpu", {}).get("cpu_percent", 0) >= 85,
+                "condition": lambda data: data.get("cpu", {}).get("cpu_percent", 0) >= 80,
                 "symptom": "high_cpu_usage",
                 "severity": "high",
                 "weight": 0.8
@@ -33,9 +35,9 @@ class RuleEngine:
             {
                 "id": "HIGH_NETWORK_TRAFFIC",
                 "condition": lambda data: (
-                    data.get("network", {}).get("bytes_sent", 0) +
-                    data.get("network", {}).get("bytes_received", 0)
-                ) > 500_000_000,
+                    (data.get("network", {}).get("bytes_sent_per_sec", 0) +
+                     data.get("network", {}).get("bytes_recv_per_sec", 0)) > 25_000_000
+                ),
                 "symptom": "high_network_traffic",
                 "severity": "medium",
                 "weight": 0.5
@@ -43,7 +45,8 @@ class RuleEngine:
             {
                 "id": "RUNAWAY_PROCESS",
                 "condition": lambda data: any(
-                    p.get("cpu", 0) >= 50 or p.get("memory", 0) >= 30
+                    not RemediationActions.is_protected_process(p.get("name"))
+                    and (p.get("cpu", 0) >= 50 or p.get("memory", 0) >= 30)
                     for p in data.get("processes", {}).get("top_processes", [])
                 ),
                 "symptom": "runaway_process",
@@ -52,7 +55,13 @@ class RuleEngine:
             },
             {
                 "id": "WINDOWS_ERROR_EVENTS",
-                "condition": lambda data: len(data.get("windows_events", [])) > 0,
+                "condition": lambda data: any(
+                    e.get("type") in ("Error", "Warning") or
+                    "error" in str(e).lower() or
+                    "pressure" in str(e).lower() or
+                    "fail" in str(e).lower()
+                    for e in data.get("windows_events", [])
+                ),
                 "symptom": "system_error_logged",
                 "severity": "low",
                 "weight": 0.3

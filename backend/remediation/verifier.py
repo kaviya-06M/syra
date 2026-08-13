@@ -12,6 +12,16 @@ class RemediationVerifier:
         self.tolerance = tolerance
 
     def verify(self, before_snapshot, after_snapshot, root_cause=None):
+        before = {
+            "cpu": before_snapshot.get("cpu", {}).get("cpu_percent", 0),
+            "memory": before_snapshot.get("memory", {}).get("memory_percent", 0),
+            "disk": before_snapshot.get("disk", {}).get("disk_percent", 0),
+        }
+        after = {
+            "cpu": after_snapshot.get("cpu", {}).get("cpu_percent", 0),
+            "memory": after_snapshot.get("memory", {}).get("memory_percent", 0),
+            "disk": after_snapshot.get("disk", {}).get("disk_percent", 0),
+        }
         checks = {
             "cpu_improved": self._improved(
                 before_snapshot.get("cpu", {}).get("cpu_percent", 0),
@@ -39,7 +49,16 @@ class RemediationVerifier:
             "resolved": resolved,
             "still_critical": still_critical,
             "checks": checks,
-            "root_cause": root_cause
+            "root_cause": root_cause,
+            "before": before,
+            "after": after,
+            "before_timestamp": before_snapshot.get("timestamp"),
+            "after_timestamp": after_snapshot.get("timestamp"),
+            "message": (
+                "Telemetry improved after the approved action."
+                if resolved else
+                "The approved action completed, but the next telemetry sample does not yet show a confirmed improvement."
+            ),
         }
 
     def _improved(self, before, after):

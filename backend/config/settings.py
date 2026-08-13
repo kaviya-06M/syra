@@ -25,11 +25,14 @@ class _Settings:
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
     NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
     NVIDIA_MODEL: str = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct")
+    NVIDIA_FALLBACK_MODEL: str = os.getenv("NVIDIA_FALLBACK_MODEL", "meta/llama-3.1-8b-instruct")
 
-    # ── LLM Defaults ─────────────────────────────────────────────────────
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1024"))
+    # ── LLM Speed & Timeout Optimization ──────────────────────────────────
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "150"))
     LLM_TOP_P: float = float(os.getenv("LLM_TOP_P", "0.9"))
+    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "8.0"))
+    LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "0"))
 
     # ── Database ──────────────────────────────────────────────────────────
     DB_PATH: str = os.path.join(
@@ -52,6 +55,9 @@ settings = _Settings()
 NVIDIA_API_KEY = settings.NVIDIA_API_KEY
 NVIDIA_BASE_URL = settings.NVIDIA_BASE_URL
 NVIDIA_MODEL = settings.NVIDIA_MODEL
+NVIDIA_FALLBACK_MODEL = settings.NVIDIA_FALLBACK_MODEL
 LLM_TEMPERATURE = settings.LLM_TEMPERATURE
 LLM_MAX_TOKENS = settings.LLM_MAX_TOKENS
 LLM_TOP_P = settings.LLM_TOP_P
+LLM_TIMEOUT = settings.LLM_TIMEOUT
+LLM_MAX_RETRIES = settings.LLM_MAX_RETRIES

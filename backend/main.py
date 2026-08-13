@@ -15,25 +15,32 @@ import sys
 import os
 import time
 import threading
+import json
 from contextlib import asynccontextmanager
 
-# Ensure backend/ is on sys.path so bare imports work
-# (e.g. `from reasoning.root_cause_engine import ...`)
+# Ensure both the workspace root and backend/ are on sys.path so imports work
+# regardless of whether the app is launched from the repo root or backend/.
+_WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-if _BACKEND_DIR not in sys.path:
-    sys.path.insert(0, _BACKEND_DIR)
+for path in (_WORKSPACE_ROOT, _BACKEND_DIR):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from database.migrations import run_migrations
+from database.database import SessionLocal
+from database.crud import save_metric, get_metric_count
 from api.routes.metrics import router as metrics_router, record_snapshot
+from api.routes import diagnosis as diagnosis_module
 from api.routes.diagnosis import router as diagnosis_router
 from api.routes.remediation import router as remediation_router
 from api.routes.chat import router as chat_router
 from api.routes.voice import router as voice_router
 from api.routes.history import router as history_router
+from api.routes.incidents import router as incidents_router
 
 # Agent collectors
 from agent.collectors.cpu_collector import CPUCollector
@@ -43,6 +50,10 @@ from agent.collectors.network_collector import NetworkCollector
 from agent.collectors.process_collector import ProcessCollector
 from agent.collectors.windows_event_collector import WindowsEventCollector
 from agent.event_generator import EventGenerator
+from ml.inference.inference_engine import InferenceEngine
+from preprocessing.cleaner import DataCleaner
+from preprocessing.feature_engineering import FeatureEngineer
+from reasoning.root_cause_engine import RootCauseEngine
 
 
 # ── Background Agent ──────────────────────────────────────────────────────────
@@ -55,6 +66,10 @@ class BackgroundAgent:
         self._running = False
         self._thread = None
         self.event_gen = EventGenerator()
+        self.inference_engine = InferenceEngine()
+        self.root_cause_engine = RootCauseEngine()
+        self.cleaner = DataCleaner()
+        self.feature_engineer = FeatureEngineer()
         self.collectors = {
             "cpu": CPUCollector(),
             "memory": MemoryCollector(),
@@ -85,7 +100,69 @@ class BackgroundAgent:
                     self.collectors["process"].collect(),
                     self.collectors["windows_event"].collect(),
                 )
+
+                # Persist the collected snapshot. The model-training job
+                # (ml/training/train.py) uses these rows to build its dataset.
+                process_data = snapshot.get("processes", {})
+                top_processes = process_data.get("top_processes", [])
+                top_process = top_processes[0].get("name") if top_processes else None
+                db = SessionLocal()
+                try:
+                    saved_metric = save_metric(
+                        db,
+                        cpu=snapshot.get("cpu", {}).get("cpu_percent", 0.0),
+                        memory=snapshot.get("memory", {}).get("memory_percent", 0.0),
+                        disk=snapshot.get("disk", {}).get("disk_percent", 0.0),
+                        network=snapshot.get("network", {}).get("bytes_sent", 0.0),
+                        process_name=top_process,
+                    )
+                    database_output = {
+                        "metric_id": saved_metric.id,
+                        "total_snapshots": get_metric_count(db),
+                    }
+                finally:
+                    db.close()
+
                 record_snapshot(snapshot)
+
+                # Preprocess -> LSTM autoencoder/anomaly detector -> failure
+                # predictor -> root-cause reasoning. InferenceEngine owns the
+                # rolling sequence buffer required by the LSTM.
+                cleaned_snapshot = self.cleaner.clean(snapshot)
+                feature_vector = self.feature_engineer.transform(cleaned_snapshot)
+                inference_output = self.inference_engine.process_snapshot(snapshot)
+                anomaly_info = {
+                    "score": inference_output.get("anomaly_score", 0.0),
+                    "affected_metric": inference_output.get("top_contributor"),
+                }
+                reasoning_result = self.root_cause_engine.diagnose(
+                    snapshot, anomaly_info=anomaly_info
+                )
+                reasoning_output = {
+                    key: value for key, value in reasoning_result.items() if key != "graph"
+                }
+                reasoning_output["timestamp"] = snapshot.get("timestamp")
+                diagnosis_module._latest_diagnosis = reasoning_output
+
+                # One JSON document per collection cycle makes the complete
+                # live pipeline observable from the backend terminal.
+                pipeline_output = {
+                    "timestamp": snapshot.get("timestamp"),
+                    "collection": snapshot,
+                    "database": database_output,
+                    "preprocessing": {
+                        "cleaned_snapshot": cleaned_snapshot,
+                        "feature_names": self.feature_engineer.feature_names(),
+                        "feature_vector": feature_vector,
+                    },
+                    "ml_inference": inference_output,
+                    "reasoning": reasoning_output,
+                }
+                print(
+                    "[SYRA Pipeline] Live output:\n"
+                    f"{json.dumps(pipeline_output, indent=2, default=str)}",
+                    flush=True,
+                )
             except Exception as e:
                 print(f"[Agent] Error: {e}")
             time.sleep(self.interval)
@@ -130,11 +207,38 @@ app.include_router(remediation_router, prefix="/api/remediation", tags=["Remedia
 app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
 app.include_router(voice_router, prefix="/api/voice", tags=["Voice"])
 app.include_router(history_router, prefix="/api/history", tags=["History"])
+app.include_router(incidents_router, prefix="/api/incidents", tags=["Incidents"])
 
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "SYRA"}
+
+
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    """Safe, human-readable view of the currently wired data pipeline."""
+    return {
+        "flow": [
+            "agent", "database", "preprocessing", "ml", "reasoning", "remediation", "llm"
+        ],
+        "stages": {
+            "agent": "active: collectors create a snapshot every polling interval",
+            "database": "active: every collected snapshot is saved to SQLite",
+            "preprocessing": "active: each live snapshot is cleaned and transformed into an ML feature vector",
+            "ml": "active: the inference engine runs the LSTM anomaly detector and failure predictor for every snapshot",
+            "training": "offline: run backend/ml/training/train.py to retrain the LSTM from saved database telemetry",
+            "reasoning": "active: root-cause reasoning runs after every live ML inference",
+            "remediation": "on demand: /api/remediation/propose, /approve, /execute, and /verify",
+            "llm": "on demand: POST /api/chat/message produces an explanation from the latest diagnosis",
+        },
+        "llm": {
+            "provider": "NVIDIA NIM",
+            "base_url": settings.NVIDIA_BASE_URL,
+            "model": settings.NVIDIA_MODEL,
+            "api_key_configured": bool(settings.NVIDIA_API_KEY),
+        },
+    }
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────

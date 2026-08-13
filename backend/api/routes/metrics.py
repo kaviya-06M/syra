@@ -68,3 +68,23 @@ def get_metrics_summary():
         "avg_disk_percent": round(sum(disk_values) / len(disk_values), 2),
         "generated_at": datetime.now().isoformat()
     }
+
+
+@router.get("/storage")
+def get_storage_breakdown(refresh: bool = False):
+    """Returns detailed folder-level breakdown and disk statistics."""
+    from agent.collectors.storage_analyzer import StorageAnalyzer
+    import psutil
+
+    disk = psutil.disk_usage("/")
+    analyzer = StorageAnalyzer(cache_ttl_seconds=120)
+    breakdown = analyzer.get_breakdown(force_refresh=refresh)
+
+    return {
+        "total_disk": disk.total,
+        "used_disk": disk.used,
+        "free_disk": disk.free,
+        "disk_percent": disk.percent,
+        "breakdown": breakdown,
+        "timestamp": datetime.now().isoformat()
+    }

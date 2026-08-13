@@ -1,8 +1,17 @@
 import argparse
+import json
 import os
+import sys
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+# Allow `python backend/ml/training/train.py` from any working directory.
+_WORKSPACE_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+if _WORKSPACE_ROOT not in sys.path:
+    sys.path.insert(0, _WORKSPACE_ROOT)
 
 try:
     import tensorflow as tf
@@ -11,11 +20,13 @@ try:
     from backend.ml.training.dataset import TelemetryDataset, prepare_data_splits
     from backend.ml.utils.threshold import AnomalyThreshold, compute_threshold_stats
     from backend.preprocessing.feature_engineering import FeatureEngineer
+    from backend.database.database import SessionLocal
 except ImportError:
     from ..models.lstm_autoencoder import LSTMAutoencoder, build_lstm_autoencoder
     from .dataset import TelemetryDataset, prepare_data_splits
     from ..utils.threshold import AnomalyThreshold, compute_threshold_stats
     from ...preprocessing.feature_engineering import FeatureEngineer
+    from ...database.database import SessionLocal
 
 
 def train_lstm_autoencoder(
@@ -41,10 +52,11 @@ def train_lstm_autoencoder(
         scaler_path=scaler_path,
     )
 
-    if db_session is not None:
-        sequences, scaler = dataset_builder.from_database(db_session)
-    else:
-        sequences, scaler = dataset_builder.from_synthetic(num_samples=2500)
+    if db_session is None:
+        raise ValueError(
+            "A database session is required. Training uses live telemetry only."
+        )
+    sequences, scaler = dataset_builder.from_database(db_session)
 
     train_data, val_data = prepare_data_splits(sequences, train_ratio=0.8)
     print(f"[Train] Prepared sequences — Train: {train_data.shape}, Val: {val_data.shape}")
@@ -124,9 +136,15 @@ if __name__ == "__main__":
     parser.add_argument("--saved-dir", type=str, default="backend/ml/saved_models", help="Artifacts directory")
     args = parser.parse_args()
 
-    train_lstm_autoencoder(
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.lr,
-        saved_dir=args.saved_dir,
-    )
+    db = SessionLocal()
+    try:
+        result = train_lstm_autoencoder(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.lr,
+            saved_dir=args.saved_dir,
+            db_session=db,
+        )
+        print(json.dumps(result, indent=2, default=str))
+    finally:
+        db.close()
